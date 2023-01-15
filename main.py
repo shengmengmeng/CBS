@@ -30,7 +30,8 @@ from data.food101 import *
 from data.food101n import *
 from data.Clothing1M import *
 from torch.cuda.amp import autocast, GradScaler
-
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 class UHead(torch.nn.Module):
     def __init__(self, in_channels, out_channels, init_method='He', lpn_head=None, npn_head=None, mlp_activation='relu', mlp_use_bn=True):
         super().__init__()
@@ -105,14 +106,13 @@ class UnifiedNet(nn.Module):
         self.classifier_type = classifier_type
         self.params_init = params_init
 
-        # load required backbone network
-
         if num_classes in [10,100]:
-            print(f'>>> Using ResNet32 backbone!')
+            print(f'>>> - Using ResNet32 backbone!')
             self.net = resnet32(num_classes=num_classes)
         else:
-            print(f'>>> Using ResNet50 backbone!')
-            self.net = ResNet(arch="resnet50", num_classes=n_classes, pretrained=True)
+            print(f'>>>- Using ResNet50 backbone!')
+            self.net = ResNet(arch="resnet50", num_classes=n_classes, pretrained=False)
+            # self.net = resnet50(num_classes=num_classes)
         init_weights(self.net, init_method=params_init)
 
         if classifier_type != 'original':
@@ -140,66 +140,6 @@ class UnifiedNet(nn.Module):
         return self.net(x)
 
 
-class textTrainDataset(torch.utils.data.Dataset):
-    def __init__(self, data_name):
-        assert data_name in ['sst', 'twitter']
-        self.data_name = data_name
-
-        train_label_all, train_label, val_data_all, val_label, test_data_all = dataloader.prepare_data()
-        self.train_label_all, self.train_label = train_label_all, train_label
-        self.val_data_all, self.val_label = val_data_all, val_label
-        self.test_data_all = test_data_all
-
-        if data_name == 'sst':
-            self.n_classes = 2
-            self.n_train_samples = train_label.shape[0]
-            self.n_test_samples = test_data_all.shape[0]
-            self.n_val_samples = val_label.shape[0]
-        else:
-            self.n_classes = 10
-            self.n_train_samples = len(train_label_all)
-            self.n_test_samples = len(test_data_all)
-            self.n_val_samples = len(val_data_all)
-
-        if data_name == 'twitter':
-            from helper_functions_twitter import embeddings_to_dict, word_list_to_embedding
-            embedding_dimension = 50
-            embeddings = embeddings_to_dict('embeddings-twitter.txt')
-            self.to_embeds = lambda x: word_list_to_embedding(x, embeddings, embedding_dimension)
-
-
-    def __getitem__(self, index):
-        if self.data_name == 'sst':
-            txt = self.train_label_all[index]
-            label = self.train_label[index]
-            return torch.from_numpy(txt), label, index
-        else:
-            txt = self.to_embeds(self.train_label_all[index:index+1])
-            label = self.train_label[index]
-            return torch.from_numpy(txt).squeeze(), label, index
-
-    def __len__(self):
-        return self.n_train_samples
-
-
-class text_dataloader:
-    def __init__(self, data_name, batch_size, num_workers):
-        self.data_name = data_name
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.all_dataset = textTrainDataset(data_name)
-
-    def run(self, mode):
-        if mode == 'train':
-            trainloader = torch.utils.data.DataLoader(dataset=self.all_dataset, batch_size=self.batch_size, shuffle=True, num_workers=1)
-            return trainloader
-        elif mode == 'test':
-            test_dataset = self.all_dataset.test_data_all
-            return test_dataset
-        elif mode == 'trainset':
-            return self.all_dataset.train_label_all, self.all_dataset.train_label
-
-
 def freeze_model_parts(net, part, task_index_major='1', re_init=False):
     if part == 1:
         for name, child_model in net.named_children():
@@ -221,77 +161,21 @@ def freeze_model_parts(net, part, task_index_major='1', re_init=False):
         raise AssertionError(f'part can only be 0, 1 or 2')
 
 
-# define inference function
-def get_label(net, test_loader, dev):
-    net.eval()
-    end_pre = torch.zeros(len(test_loader.dataset))
-    n = 0
-    with torch.no_grad():
-        for _, (inputs) in enumerate(test_loader):
-            # print('ii')
-            inputs = inputs.cuda()
-            outputs = net(inputs)
-            if type(outputs) is dict:
-                outputs = outputs['logits']
-            outputs = torch.argmax(outputs, -1)
-            for b in range(inputs.size(0)):
-                end_pre[n] = outputs[b]
-                n += 1
-    return end_pre
 
 
-def get_label_txt(net, test_data, dev, to_embeds=None):
-    net.eval()
-    with torch.no_grad():
-        if to_embeds is None:
-            data = torch.from_numpy(test_data).cuda()
-        else:
-            data = torch.from_numpy(to_embeds(test_data)).cuda()
-        outputs = net(data)
-        if type(outputs) is dict:
-            outputs = outputs['logits']
-        end_pre = outputs.data.max(1)[1].type(torch.LongTensor)
-    return end_pre
-
-
-def get_relabel(net, trainloader, dev):
-    end_relabel = torch.zeros(len(trainloader.dataset))
-    with torch.no_grad():
-        pbar = tqdm(trainloader, ncols=150, ascii=' >', leave=False, desc='get relabeling')
-        for it, sample in enumerate(pbar):
-            x, y, indices = sample
-            x = x.cuda()
-            outputs = net(x)
-            if type(outputs) is dict:
-                outputs = outputs['logits']
-            pseudo_labels = torch.argmax(outputs, -1)
-            for b in range(x.size(0)):
-                end_relabel[indices[b]] = pseudo_labels[b]
-    end_relabel = end_relabel.type(torch.LongTensor)
-    return np.array(end_relabel.cpu())
-
-
-
-def warmup(net, optimizer, trainloader, dev,train_loss_meter,train_accuracy_meter, no_penalty=False):
+def warmup(net, optimizer, trainloader, dev, train_loss_meter,train_accuracy_meter):
     net.train()
     pbar = tqdm(trainloader, ncols=150, ascii=' >', leave=False, desc='training')
     for it, sample in enumerate(pbar):
 
-        x_, y, indices = sample
-        y =y.cuda()
-
-        x, x_w, x_s = x_
-        x,x_w= x.to(device),x_w.to(device)
+        x, y, indices = sample
+        x, y = x.cuda(), y.cuda()
         outputs = net(x)
-        outputs_w = net(x_w)
         logits = outputs['logits'] if type(outputs) is dict else outputs
-        logits_w = outputs_w['logits'] if type(outputs_w) is dict else outputs_w
-        loss_ce = F.cross_entropy(logits, y, reduction="mean")*0.5+F.cross_entropy(logits_w, y, reduction="mean")*0.5
-        if no_penalty:
-            loss = loss_ce
-        else:
-            penalty = conf_penalty(logits)
-            loss = loss_ce + penalty
+        loss_ce = F.cross_entropy(logits, y)
+        penalty = conf_penalty(logits)
+        loss = loss_ce + penalty
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -310,17 +194,40 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
         init_target_list = True
     else:
         init_target_list = False
+    is_text_task = isinstance(trainloader, dict)
+    logits_ = torch.zeros(num_samples, num_classes).cuda()
     with torch.no_grad():
-        for it, sample in enumerate(trainloader):
-            inputs_, y, index = sample
-            index = index.cuda()
-            if init_target_list:
-                targets_list[index] = y.float()
+        if not is_text_task:
+            for it, sample in enumerate(trainloader):
+                inputs, y, index = sample
+                index = index.cuda()
+                if init_target_list:
+                    targets_list[index] = y.float()
+                inputs, y = inputs.cuda(), y.cuda()
+                with autocast():
+                    outputs = net(inputs)
+                    logits = outputs['logits'] if type(outputs) is dict else outputs
+                    if criterion == 'loss':
+                        loss = F.cross_entropy(logits, y, reduction='none')
+                    elif criterion == 'jsdiv':
+                        given_labels = get_smoothed_label_distribution(y, num_classes, epsilon=1e-12)
+                        probs = logits.softmax(dim=1)
+                        loss = js_div(probs, given_labels)
+                    else:
+                        raise AssertionError('Not Supported!')
 
-            inputs,inputs_w,inputs_s=inputs_
-            inputs, y = inputs.cuda(), y.cuda()
+                    unclean_criterions[index] = loss.cpu()
+                    # logits_[index] = logits.float()
+        else:
+            train_label_all, train_label, to_embeds = trainloader['train_label_all'], trainloader['train_label'], trainloader['to_embeds']
+            inputs = torch.from_numpy(to_embeds(train_label_all))
+            y = torch.from_numpy(train_label)
+            if init_target_list:
+                targets_list = y.float()
+            # inputs, y = inputs.cuda(), y.cuda()
             with autocast():
-                outputs = net(inputs)
+                outputs = net.cpu()(inputs)
+                net = net.cuda()
                 logits = outputs['logits'] if type(outputs) is dict else outputs
                 if criterion == 'loss':
                     loss = F.cross_entropy(logits, y, reduction='none')
@@ -331,8 +238,9 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
                 else:
                     raise AssertionError('Not Supported!')
 
-                unclean_criterions[index] = loss.cpu()
-                # logits_[index] = logits.float()
+                unclean_criterions = loss.cpu()
+                # logits_ = logits.cuda()
+
     unclean_criterions = (unclean_criterions - unclean_criterions.min()) / (unclean_criterions.max() - unclean_criterions.min())
 
     prob_clean = np.zeros(num_samples)
@@ -352,101 +260,98 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
 
 
 
-
-def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accuracy_meter, num_class, ep, p_clean, logits_, loss_weight, corr_label_dist, ema_label_dist, params):
+def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accuracy_meter, aug, num_class, ep, p_clean, logits_, loss_weight, corr_label_dist, ema_label_dist, params):
     net.train()
     pbar = tqdm(trainloader, ncols=150, ascii=' >', leave=False, desc='training')
     for it, sample in enumerate(pbar):
-
-        x_, y, indices = sample
-        x,x_w,x_s=x_
+        x, y, indices = sample
         batch_size = x.size(0)
         x, y = x.cuda(), y.cuda()
-        x_w,x_s=x_w.cuda(),x_s.cuda()
-        # with autocast():
-        if True:
-            labels_x = torch.zeros(batch_size, num_class).cuda().scatter_(1, y.view(-1, 1), 1)
-            w_x = torch.FloatTensor(p_clean[indices]).view(-1, 1).cuda() if isinstance(p_clean, np.ndarray) else p_clean[indices].view(-1, 1)
+
+        labels_ = torch.zeros(batch_size, num_class).cuda().scatter_(1, y.view(-1, 1), 1)
+        weight_ = torch.FloatTensor(p_clean[indices]).view(-1, 1).cuda() if isinstance(p_clean, np.ndarray) else p_clean[indices].view(-1, 1)
+
+        with torch.no_grad():
+            outputs = net(x)
+            logits = outputs['logits'] if type(outputs) is dict else outputs
+            px = logits.softmax(dim=1)
+            pred_net = F.one_hot(px.max(dim=1)[1], num_class).float()
+            high_conf_cond = (labels_ * px).sum(dim=1) > params.tau
+            weight_[high_conf_cond] = 1
+            if params.useEMA:
+                label_ema = ema_label_dist[indices, :].clone().cuda()
+                aph = params.aph
+                label_ema = label_ema * aph + px * (1 - aph)
+                pseudo_label_l = labels_ * weight_ + label_ema * (1 - weight_)
+            else:
+                pseudo_label_l = labels_ * weight_ + pred_net * (1 - weight_)
+            idx_chosen = torch.where(weight_ == 1)[0]
+
+            idx_noises = torch.where(weight_ != 1)[0]
+            idx_noises = torch.cat((idx_noises, idx_chosen[torch.randperm(idx_chosen.size(0))]), dim=0)
+
+            x2 = aug(x, mode='s').cuda()
+            outputs2 = net(x2)
+            logits2 = outputs2['logits'] if type(outputs2) is dict else outputs2
 
             with torch.no_grad():
-                outputs = net(x)
-                logits = outputs['logits'] if type(outputs) is dict else outputs
-                # logits=logits_[indices]
-                px = logits.softmax(dim=1)
-                pred_net = F.one_hot(px.max(dim=1)[1], num_class).float()
-                high_conf_cond = (labels_x * px).sum(dim=1) > params.tau
-                w_x[high_conf_cond] = 1
-                if params.useEMA:
-                    label_ema = ema_label_dist[indices, :].clone().cuda()
-                    aph = params.aph # 0.1 - (0.1 - params.aph) * linear_rampup(ep, params.start_expand)
-                    label_ema = label_ema * aph + px * (1 - aph)
-                    pseudo_label_l = labels_x * w_x + label_ema * (1 - w_x)
-                else:
-                    pseudo_label_l = labels_x * w_x + pred_net * (1 - w_x)
-                idx_chosen = torch.where(w_x == 1)[0]   # idx_chosen includes clean samples only
-                n_clean = idx_chosen.size(0)
+                if epoch > params.start_expand:
+                    expected_ratio = params.bs_threshold
+                    px2 = torch.zeros_like(px) - 0.1
+                    px2[idx_noises] = logits2.softmax(dim=1)
+                    score1 = px.max(dim=1)[0]
+                    score2 = px2.max(dim=1)[0]
+                    match = px.max(dim=1)[1] == px2.max(dim=1)[1]
+                    hc2_sel_wx1 = high_conf_sel2(idx_chosen, weight_, batch_size, score1, score2, match, params.tau_expand,
+                                                 expected_ratio)
+                    idx_chosen = torch.where(hc2_sel_wx1 == 1)[0]
 
-                idx_noises = torch.where(w_x != 1)[0]
-                overlay_num = min(int(params.overlay_ratio * batch_size), idx_chosen.size(0))
-                idx_noises = torch.cat((idx_noises, idx_chosen[torch.randperm(idx_chosen.size(0))[:overlay_num]]), dim=0)
+            idx_for_idx_noises = torch.randperm(idx_noises.size(0))
 
-                if idx_noises.size(0)>0:
-                    outputs2 = net(x_s)
-                    logits2 = outputs2['logits'] if type(outputs2) is dict else outputs2
+        l = np.random.beta(4, 4)
+        l = max(l, 1 - l)
+        if params.use_mixup:
+            idx2 = idx_chosen[torch.randperm(idx_chosen.size(0))]
 
-                ni = max(int((1 + params.overlay_ratio) * batch_size) - idx_chosen.size(0), 0)
-                idx_for_idx_noises = torch.randperm(idx_noises.size(0))[:ni]
+            x_mix = l * x[idx_chosen] + (1 - l) * x[idx2]
+            pseudo_label_mix = l * pseudo_label_l[idx_chosen] + (1 - l) * pseudo_label_l[idx2]
+            outputs_mix = net(x_mix)
+            logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
+            loss_mix = F.cross_entropy(logits_mix, pseudo_label_mix)
 
-            # Loss Over Chosen Clean Samples & ID Noisy Samples
+            pseudo_label_mix = copy.deepcopy(pseudo_label_l[idx_chosen])
+            x_mix = copy.deepcopy(x[idx_chosen])
+            confidence = px.max(dim=1)[0]
             l = np.random.beta(4, 4)
             l = max(l, 1 - l)
-            if params.use_mixup and idx_chosen.size(0)>0:
-                idx2 = idx_chosen[torch.randperm(idx_chosen.size(0))]
-
-                x_mix = l * x[idx_chosen] + (1 - l) * x[idx2]
-                # if is_sst: x_mix = x_mix.long()
-                pseudo_label_mix = l * pseudo_label_l[idx_chosen] + (1 - l) * pseudo_label_l[idx2]
-                outputs_mix = net(x_mix)
-                logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
-                loss_mix = F.cross_entropy(logits_mix, pseudo_label_mix)
-
-                if params.CABC :
-                    pseudo_label_mix = copy.deepcopy(pseudo_label_l[idx_chosen])
-                    x_mix = copy.deepcopy(x[idx_chosen])
-                    confidence = px.max(dim=1)[0]
-                    for item in range(idx_chosen.size(0)):
-                        l = np.random.beta(4, 4)
-                        l = max(l, 1 - l)
-                        if confidence[idx_chosen[item]] > confidence[idx2[item]]:
-                            x_mix[item]= l * x[idx_chosen[item]] + (1 - l) * x[idx2[item]]
-                            pseudo_label_mix[item]= l * pseudo_label_l[idx_chosen[item]] + (1 - l) * pseudo_label_l[idx2[item]]
-                        else:
-                            x_mix[item] =  (1 - l) * x[idx_chosen[item]] + l * x[idx2[item]]
-                            pseudo_label_mix[item] = (1 - l) * pseudo_label_l[idx_chosen[item]] + l * pseudo_label_l[idx2[item]]
-
-                    outputs_mix = net(x_mix)
-                    logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
-                    loss_mix =loss_mix*0.5+0.5* F.cross_entropy(logits_mix, pseudo_label_mix)
-            else:
-                loss_mix = torch.tensor(0).float()
-
-            if params.use_cons and idx_noises.size(0)>0:
-                loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_noises[idx_for_idx_noises]])
-            else:
-                if params.use_mixup:
-                    loss_cr = torch.tensor(0).float()
+            for item in range(idx_chosen.size(0)):
+                if confidence[idx_chosen[item]] > confidence[idx2[item]]:
+                    x_mix[item] = l * x[idx_chosen[item]] + (1 - l) * x[idx2[item]]
+                    pseudo_label_mix[item] = l * pseudo_label_l[idx_chosen[item]] + (1 - l) * pseudo_label_l[
+                        idx2[item]]
                 else:
-                    loss_cr = F.cross_entropy(logits2, pseudo_label_l[idx_noises])
+                    x_mix[item] = (1 - l) * x[idx_chosen[item]] + l * x[idx2[item]]
+                    pseudo_label_mix[item] = (1 - l) * pseudo_label_l[idx_chosen[item]] + l * pseudo_label_l[
+                        idx2[item]]
 
-            loss = loss_mix + loss_cr * loss_weight
-        # scaler.scale(loss).backward()
-        # try:
-        #     scaler.step(optimizer)
-        # except RuntimeError:  # in case of "RuntimeError: Function 'CudnnBatchNormBackward' returned nan values in its 0th output."
-        #     scaler.unscale_(optimizer)
-        #     torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=2, norm_type=2.0)
-        #     scaler.step(optimizer)
-        # scaler.update()
+            outputs_mix = net(x_mix)
+            logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
+            loss_mix = loss_mix * config.alpha + (1 - config.alpha) * F.cross_entropy(logits_mix, pseudo_label_mix)
+        else:
+            outputs_mix = net(x[idx_chosen])
+            logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
+            loss_mix = F.cross_entropy(logits_mix, pseudo_label_l[idx_chosen])
+
+
+        if params.use_cons:
+            loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_for_idx_noises])
+        else:
+            if params.use_mixup:
+                loss_cr = torch.tensor(0).float()
+            else:
+                loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_for_idx_noises])
+
+        loss = loss_mix + loss_cr*loss_weight
 
         optimizer.zero_grad()
         loss.backward()
@@ -461,14 +366,13 @@ def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accura
             ema_label_dist[indices] = label_ema.detach().clone().cpu().data
             del label_ema
 
-
-def high_conf_sel2(idx_chosen, w_x, batch_size, score1, score2, match, tau, expected_r):
-    w_x2 = w_x.clone()
+def high_conf_sel2(idx_chosen, weight_, batch_size, score1, score2, match, tau, expected_r):
+    weight_2 = weight_.clone()
     if (1. * idx_chosen.shape[0] / batch_size) < expected_r:
         # when clean data is insufficient, try to incorporate more examples
         high_conf_cond2 = (score1 > tau) * (score2 > tau) * match
         # both nets agrees
-        high_conf_cond2 = (1. * high_conf_cond2 - w_x.squeeze()) > 0
+        high_conf_cond2 = (1. * high_conf_cond2 - weight_.squeeze()) > 0
         # remove already selected examples; newly selected
         hc2_idx = torch.where(high_conf_cond2)[0]
 
@@ -480,8 +384,8 @@ def high_conf_sel2(idx_chosen, w_x, batch_size, score1, score2, match, tau, expe
             idx_remove = (-score_mean[hc2_idx]).sort()[1][max_to_sel_num:]
             # take top scores
             high_conf_cond2[hc2_idx[idx_remove]] = False
-        w_x2[high_conf_cond2] = 1
-    return w_x2
+        weight_2[high_conf_cond2] = 1
+    return weight_2
 
 
 def build_model(num_classes, params_init, dev):
@@ -503,14 +407,13 @@ def build_loader(params):
     dataset = params.dataset
     if dataset=="cifar100":
         num_classes = 100
-        transform = build_transform(rescale_size=params.rescale_size, crop_size=params.crop_size)
         train_dataset = CIFAR100_im(root="./data/cifar100", train=True, meta=False, num_meta=0,
-                                    corruption_prob=params.closeset_ratio, corruption_type='unif', transform=CLDataTransform(transform['cifar_train'], transform['cifar_train_strong_aug']),
+                                    corruption_prob=params.closeset_ratio, corruption_type='unif', transform="hard",
                                     target_transform=None, download=True, seed=params.seed, imblance=params.imbalance,
                                     imb_factor=params.imb_factor)
 
         test_set = CIFAR100_im(root="./data/cifar100", train=False, meta=False, num_meta=0,
-                               corruption_prob=params.closeset_ratio, corruption_type='unif', transform=transform['cifar_test'],
+                               corruption_prob=params.closeset_ratio, corruption_type='unif', transform="easy",
                                target_transform=None, download=True, seed=params.seed, imblance=params.imbalance,
                                imb_factor=params.imb_factor)
 
@@ -521,14 +424,13 @@ def build_loader(params):
 
     if dataset=="cifar10":
         num_classes = 10
-        transform = build_transform(rescale_size=params.rescale_size, crop_size=params.crop_size)
         train_dataset = CIFAR10_im(root="./data/cifar10", train=True, meta=False, num_meta=0,
-                                    corruption_prob=params.closeset_ratio, corruption_type='unif', transform=CLDataTransform(transform['cifar_train'], transform['cifar_train_strong_aug']),
+                                    corruption_prob=params.closeset_ratio, corruption_type='unif', transform="hard",
                                     target_transform=None, download=True, seed=params.seed, imblance=params.imbalance,
                                     imb_factor=params.imb_factor)
 
         test_set = CIFAR10_im(root="./data/cifar10", train=False, meta=False, num_meta=0,
-                               corruption_prob=params.closeset_ratio, corruption_type='unif', transform=transform['cifar_test'],
+                               corruption_prob=params.closeset_ratio, corruption_type='unif', transform="easy",
                                target_transform=None, download=True, seed=params.seed, imblance=params.imbalance,
                                imb_factor=params.imb_factor)
         trainloader = DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=8,
@@ -541,9 +443,21 @@ def build_loader(params):
         root="/data/Food-101N_release/"
         rescale_size = 512
         crop_size = 448
-        transform = build_transform(rescale_size=rescale_size, crop_size=crop_size)
-        train_dataset = Food101N(root, transform=CLDataTransform(transform['train'], transform['train_strong_aug']))
-        test_set = Food101(os.path.join(root, 'food-101'), split='test', transform=transform['test'])
+        train_transform = torchvision.transforms.Compose([
+            torchvision.transforms.Resize(size=rescale_size),
+            torchvision.transforms.RandomHorizontalFlip(),
+            torchvision.transforms.RandomCrop(size=crop_size),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        ])
+        test_transform = torchvision.transforms.Compose([
+            torchvision.transforms.Resize(size=rescale_size),
+            torchvision.transforms.CenterCrop(size=crop_size),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+        ])
+        train_dataset = Food101N(root, transform=train_transform)
+        test_set = Food101(os.path.join(root, 'food-101'), split='test', transform=test_transform)
 
         trainloader = DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=8,
                                  pin_memory=True)
@@ -552,40 +466,31 @@ def build_loader(params):
     if dataset == "Clothing1M":
         num_classes = 14
         root="/data/Clothing1M/"
-
-        rescale_size = 256
-        crop_size = 224
-        transform = build_transform(rescale_size=rescale_size, crop_size=crop_size)
-
-        train_dataset = clothing_dataset(root, transform=CLDataTransform(transform['train_clothing1m'], transform['train_strong_aug_clothing1m']), mode='all')
-        test_set = clothing_dataset(root, transform=transform["test_clothing1m"], mode='test')
+        train_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.6959, 0.6537, 0.6371), (0.3113, 0.3192, 0.3214)),
+        ])
+        test_transform = transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize((0.6959, 0.6537, 0.6371), (0.3113, 0.3192, 0.3214)),
+        ])
+        train_dataset = clothing_dataset(root, transform=train_transform, mode='all')
+        test_set = clothing_dataset(root, transform=test_transform, mode='test')
 
         trainloader = DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=8,
                                  pin_memory=True)
-        test_loader = DataLoader(test_set, batch_size=16, shuffle=False, num_workers=8, pin_memory=False)
-
+        test_loader = DataLoader(test_set, batch_size=params.batch_size, shuffle=False, num_workers=8, pin_memory=False)
 
     num_samples = len(trainloader.dataset)
     return_dict = {'trainloader': trainloader, 'num_classes': num_classes, 'num_samples': num_samples, 'dataset': dataset}
     return_dict['test_loader'] = test_loader
 
     return return_dict
-
-
-def get_img_size(dataset):
-    if dataset in ['cifar10', 'cifar100','cross_model_data']:
-        return (32, 32)
-    elif dataset in ['tiny_imagenet', 'mix_data','food-101n','Clothing1M']:
-        return (56, 56)
-    elif dataset == 'webvision':
-        return (227, 227)
-    elif dataset == 'sst':
-        return (30,)
-    elif dataset == 'twitter':
-        return (150,)
-    else:
-        raise AssertionError(f'ReAug for {dataset} is not implemented yet!')
-
 
 def init_corrected_labels(num_samples, num_classes, trainloader, soft=True):
     corr_label_dist = torch.zeros((num_samples, num_classes)).float()
@@ -599,30 +504,15 @@ def init_corrected_labels(num_samples, num_classes, trainloader, soft=True):
     return corr_label_dist
 
 
-def use_PES(params, net, optimizer, ep, lrs, task_index_major):
-    if params.use_pes:
-        pes_start_epoch = int(params.warmup_epochs * (1 - params.pes_rate))
-        if ep == pes_start_epoch:
-            freeze_model_parts(net, 2, task_index_major, re_init=params.pes_reinit)
-        elif ep == params.warmup_epochs:
-            unfreeze_layer(net)
-        if pes_start_epoch <= ep < params.warmup_epochs:
-            adjust_lr(optimizer, lrs[ep] * 0.01)
-
 
 # parse arguments
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--args', type=str, default=None)
-    parser.add_argument('--task', type=str, default='7-0')
     parser.add_argument('--logger-root', type=str, default='./result/')
     parser.add_argument('--gpu', type=str, default="0")
     parser.add_argument('--seed', type=int, default=123)
-    parser.add_argument('--num-workers', type=int, default=4)
-    parser.add_argument('--project', type=str, default='')
     parser.add_argument('--batch-size', type=int, default=128)
-
-    parser.add_argument('--CABC', type=bool, default=False)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--lr-decay', type=str, default='cosine:20,5e-4,100')
     parser.add_argument('--weight-decay', type=float, default=5e-4)
@@ -637,8 +527,6 @@ def parse_args():
     parser.add_argument('--aug-type', type=str, default='auto')
     parser.add_argument('--use-cons', type=bool, default=True)
     parser.add_argument('--use-mixup', type=bool, default=True)
-    parser.add_argument('--use-fmix', type=bool, default=False)
-    parser.add_argument('--fmix-ratio', type=float, default=1.0)
     parser.add_argument('--rho-range', type=str, default='0.2:0.2:60', help='Format: stop:start:step')
     parser.add_argument('--omega-range', type=str, default='1.0:1.0:60', help='Format: stop:start:step')
     parser.add_argument('--tau', type=float, default=0.9)
@@ -646,16 +534,9 @@ def parse_args():
     parser.add_argument('--start-expand', type=int, default=80)
     parser.add_argument('--bs-threshold', type=float, default=0.9)
 
-    parser.add_argument('--use-pes', type=bool, default=False)
-    parser.add_argument('--pes-rate', type=float, default=0.1)
-    parser.add_argument('--pes-reinit', type=bool, default=False)
-
     parser.add_argument('--useEMA', type=bool, default=True)
     parser.add_argument('--aph', type=float, default=0.55)
-    parser.add_argument('--overlay-ratio', type=float, default=0.15)
-    parser.add_argument('--no-penalty', type=bool, default=False)
 
-    #基于PNP的对比实验增加参数
     parser.add_argument('--rescale-size', type=int, default=32)
     parser.add_argument('--crop-size', type=int, default=32)
     parser.add_argument('--synthetic-data', type=str, default='cifar100nc')
@@ -663,14 +544,13 @@ def parse_args():
     parser.add_argument('--closeset-ratio', type=float, default=0.2)
     parser.add_argument('--database', type=str, default='./dataset')
 
-    #基于PES的对比实验增加参数
     parser.add_argument('--dataset', type=str, default='cifar100')
     parser.add_argument('--model', type=str, default='resnet32')
     parser.add_argument('--imbalance', type=bool, default=False)
     parser.add_argument('--data_percent', default=1, type=float, help='data number percent')
 
-    #基于Curvenet的参数
     parser.add_argument('--imb-factor', type=float, default=0.05)
+    parser.add_argument('--alpha', type=float, default=0.5)
     parser.add_argument('--save-weights', type=bool, default=False)
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--restart-epoch', type=int, default=0)
@@ -711,6 +591,7 @@ if __name__ == '__main__':
                             warmup_gradual=config.warmup_gradual)
 
     # init re-augmenter
+    re_aug = ReAug(strong_aug=config.aug_type, dataset=dataset_name)
 
     # Training
     corrected_label_distributions = init_corrected_labels(n_samples, n_classes, loader_dict['trainloader'], soft=False)
@@ -719,7 +600,6 @@ if __name__ == '__main__':
     else:
         ema_label_distributions = None
     targets_all = None
-
     best_accuracy, best_epoch = 0.0, None
     train_loss_meter = AverageMeter()
     train_accuracy_meter = AverageMeter()
@@ -734,13 +614,13 @@ if __name__ == '__main__':
         adjust_lr(optim, lr_plan[epoch])
         input_loader = loader_dict['trainloader']
         if epoch < config.warmup_epochs:
-            warmup(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter, config.no_penalty)
+            warmup(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter)
         else:
             rho = rho_begin - (rho_begin - rho_final) * linear_rampup(epoch - config.warmup_epochs, T_rho)
             approx_clean_probs, targets_all,logits_  = eval_train(model, n_classes, n_samples, input_loader, rho, device,
                                                          targets_all, criterion=config.criterion)  # np.array, (num_samples, )
             omega = omega_begin - (omega_begin - omega_final) * linear_rampup(epoch - config.warmup_epochs, T_omega)
-            robust_train(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter,n_classes, epoch, approx_clean_probs, logits_, omega,
+            robust_train(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter, re_aug,n_classes, epoch, approx_clean_probs, logits_, omega,
                          corrected_label_distributions, ema_label_distributions, config)
 
         eval_result = evaluate_cls_acc(loader_dict['test_loader'], model, device)
@@ -754,4 +634,3 @@ if __name__ == '__main__':
         print(
             f'>> Epoch {epoch}: loss {train_loss_meter.avg:.2f} ,train acc {train_accuracy_meter.avg:.2f} ,test acc {test_accuracy:.2f}, best acc {best_accuracy:.2f}')
         epoch+=1
-
