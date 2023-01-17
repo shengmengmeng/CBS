@@ -5,10 +5,6 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from randaugment import CIFAR10Policy, ImageNetPolicy, Cutout, RandAugment
-from data.noisy_cifar import NoisyCIFAR10, NoisyCIFAR100,NoisyCIFAR100_class_imbalanced
-from data.image_folder import IndexedImageFolder
-from data.food101 import Food101
-from data.food101n import Food101N
 import numpy as np
 import cv2
 
