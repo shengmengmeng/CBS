@@ -8,28 +8,15 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
-from torchvision.datasets import CIFAR10, CIFAR100
-import numpy as np
 from tqdm import tqdm
 from utils import *
-from loss import *
-from model.SevenCNN import CNN, CLDataTransform
 from utils.builder import *
 from model.MLPHeader import MLPHead
-from model.PreResNet import *
 from util import *
-from fmix import *
 from utils.eval import *
-from utils.NoisyUtils import *
 from model.ResNet32 import resnet32
-from model.resnet import resnet50
 from data.imbalance_cifar import *
-from data.food101 import *
-from data.food101n import *
 from data.Clothing1M import *
-from torch.cuda.amp import autocast, GradScaler
 import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 class UHead(torch.nn.Module):
@@ -111,7 +98,7 @@ class UnifiedNet(nn.Module):
             self.net = resnet32(num_classes=num_classes)
         else:
             print(f'>>>- Using ResNet50 backbone!')
-            self.net = ResNet(arch="resnet50", num_classes=n_classes, pretrained=False)
+            self.net = ResNet(arch="resnet50", num_classes=n_classes, pretrained=True)
             # self.net = resnet50(num_classes=num_classes)
         init_weights(self.net, init_method=params_init)
 
