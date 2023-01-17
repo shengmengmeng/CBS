@@ -8,11 +8,11 @@ Recent studies tend to regard low-loss samples as clean ones and discard high-lo
 Here is an example shell script to run CBS on CIFAR-10 :
 
 ```python
-python main.py \
-    --warmup-epoch 40 --epoch 250 --rho-range 0.6:0.6:100 \
-    --batch-size 128 --lr 0.05 --warmup-lr 0.01 --start-expand 200 \
-    --noise-type unif --closeset-ratio 0.4 --lr-decay cosine:40,5e-5,240\
-    --overlay-ratio 1.0 --task 10-0 --opt sgd --dataset cifar10\
-    --imbalance True --imb-factor 0.05 --CABC True --alpha 0.6 --aph 0.35
+ python main.py --warmup-epoch 40 --epoch 250 \
+        --rho-range 0.6:0.6:100 --batch-size 128 \
+        --lr 0.05 --warmup-lr 0.01 --start-expand 200 --noise-type unif \
+        --closeset-ratio 0.4 --lr-decay cosine:40,5e-5,240 \
+        --opt sgd --dataset cifar10 --imbalance True --imb-factor 0.05 --alpha 0.6 --aph 0.35
+
 
 
