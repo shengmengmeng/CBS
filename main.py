@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 from utils import *
+from loss import *
 from utils.builder import *
 from model.MLPHeader import MLPHead
 from util import *
