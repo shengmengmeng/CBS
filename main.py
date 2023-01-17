@@ -185,49 +185,25 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
     is_text_task = isinstance(trainloader, dict)
     logits_ = torch.zeros(num_samples, num_classes).cuda()
     with torch.no_grad():
-        if not is_text_task:
-            for it, sample in enumerate(trainloader):
-                inputs, y, index = sample
-                index = index.cuda()
-                if init_target_list:
-                    targets_list[index] = y.float()
-                inputs, y = inputs.cuda(), y.cuda()
-                with autocast():
-                    outputs = net(inputs)
-                    logits = outputs['logits'] if type(outputs) is dict else outputs
-                    if criterion == 'loss':
-                        loss = F.cross_entropy(logits, y, reduction='none')
-                    elif criterion == 'jsdiv':
-                        given_labels = get_smoothed_label_distribution(y, num_classes, epsilon=1e-12)
-                        probs = logits.softmax(dim=1)
-                        loss = js_div(probs, given_labels)
-                    else:
-                        raise AssertionError('Not Supported!')
-
-                    unclean_criterions[index] = loss.cpu()
-                    # logits_[index] = logits.float()
-        else:
-            train_label_all, train_label, to_embeds = trainloader['train_label_all'], trainloader['train_label'], trainloader['to_embeds']
-            inputs = torch.from_numpy(to_embeds(train_label_all))
-            y = torch.from_numpy(train_label)
+        for it, sample in enumerate(trainloader):
+            inputs, y, index = sample
+            index = index.cuda()
             if init_target_list:
-                targets_list = y.float()
-            # inputs, y = inputs.cuda(), y.cuda()
-            with autocast():
-                outputs = net.cpu()(inputs)
-                net = net.cuda()
-                logits = outputs['logits'] if type(outputs) is dict else outputs
-                if criterion == 'loss':
-                    loss = F.cross_entropy(logits, y, reduction='none')
-                elif criterion == 'jsdiv':
-                    given_labels = get_smoothed_label_distribution(y, num_classes, epsilon=1e-12)
-                    probs = logits.softmax(dim=1)
-                    loss = js_div(probs, given_labels)
-                else:
-                    raise AssertionError('Not Supported!')
+                targets_list[index] = y.float()
+            inputs, y = inputs.cuda(), y.cuda()
+            outputs = net(inputs)
+            logits = outputs['logits'] if type(outputs) is dict else outputs
+            if criterion == 'loss':
+                loss = F.cross_entropy(logits, y, reduction='none')
+            elif criterion == 'jsdiv':
+                given_labels = get_smoothed_label_distribution(y, num_classes, epsilon=1e-12)
+                probs = logits.softmax(dim=1)
+                loss = js_div(probs, given_labels)
+            else:
+                raise AssertionError('Not Supported!')
 
-                unclean_criterions = loss.cpu()
-                # logits_ = logits.cuda()
+            unclean_criterions[index] = loss.cpu()
+            # logits_[index] = logits.float()
 
     unclean_criterions = (unclean_criterions - unclean_criterions.min()) / (unclean_criterions.max() - unclean_criterions.min())
 
