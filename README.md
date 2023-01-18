@@ -6,7 +6,21 @@ Recent studies tend to regard low-loss samples as clean ones and discard high-lo
 
 ![framework](figure/Figure.png)
 
-### Usage
+# Installation
+```
+pip install -r requirements.txt
+```
+
+# Datasets
+Currently three datasets are supported: CIFAR10, CIFAR100 and Clothing1M
+Synthetic datasets are mainly derived from CIFAR10 and CIFAR100. 
+To further verify the feasibility and effectiveness of our method in practical scenarios, we conduct experiments on a real-world dataset (\ie, Clothing1M)
+
+You can download the CIFAR10 and CIFAR100 on [this](https://www.cs.toronto.edu/~kriz/cifar.html).
+
+You can download the Clothing1M from [here](https://github.com/lightas/Occluded-DukeMTMC-Dataset).
+
+# Training
 
 Here is an example shell script to run CBS on CIFAR-10 :
 
