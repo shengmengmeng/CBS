@@ -4,7 +4,7 @@ Recent studies tend to regard low-loss samples as clean ones and discard high-lo
 
 # Pipeline
 
-![framework](example/Feature2_4.png)
+![framework](Feature2_4.png)
 
 ### Usage
 
