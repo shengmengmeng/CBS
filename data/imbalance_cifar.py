@@ -207,6 +207,11 @@ class CIFAR10_im(data.Dataset):
 
                 for i in range(len(self.train_labels)):
                     self.train_labels[i] = np.random.choice(num_classes, p=self.C[self.train_labels[i]])
+                a=0
+                for i in range(len(self.train_labels)):
+                    if self.train_labels[i] == self.true_labels[i]:
+                        a+=1
+                print("ture noise rate is "+str(a/len(self.train_labels)))
         else:
             f = self.test_list[0][0]
             file = os.path.join(root, self.base_folder, f)
@@ -242,7 +247,7 @@ class CIFAR10_im(data.Dataset):
             true_target = self.target_transform(true_target)
 
         # return img, target, index, true_target
-        return img, target, true_target
+        return img, target, index
 
     def __len__(self):
         if self.train:
