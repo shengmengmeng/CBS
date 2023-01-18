@@ -30,6 +30,21 @@ Here is an example shell script to run CBS on CIFAR-10 :
         --lr 0.05 --warmup-lr 0.01 --start-expand 200 --noise-type unif \
         --closeset-ratio 0.4 --lr-decay cosine:40,5e-5,240 \
         --opt sgd --dataset cifar10 --imbalance True --imb-factor 0.05 --alpha 0.6 --aph 0.35
+```
+# Results on Cifar10 and Cifar100
 
-
+| Datasets               |  Cifar10               |   Cifar100                | 
+|:-----------------------|:-----------------------|:--------------------------||
+|  IF                    | [1,10,20,50,100,200]   |    [1,10,20]              |
+|  NR                    |  [0.0,0.2,0.4]         |     [0.0,0.2,0.4,0.6]     |
+|  CE                    |  74.49                 | 46.76                     |
+|  Class-Balanced        |63.49                   |     42.81                 |
+|  Focal                 |71.59                   |         43.85             |
+|  LDAM-DRW              |  73.46                 |         45.47             |
+|Co-teaching             |  60.63                 |         36.55             |
+|O2U                     |  65.01                 |         40.21             |
+|MW-Net                  |  74.13                 |         49.28             |
+|HAR                     | 73.50                  |          42.88            |
+|CurveNet                |  75.70                 | 50.49                     |
+|Ours                    |78.47                   |     52.94                 |
 
