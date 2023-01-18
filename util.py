@@ -345,10 +345,6 @@ class ReAug(object):
             mean = [x / 255.0 for x in [125.3, 123.0, 113.9]]
             std  = [x / 255.0 for x in [ 63.0,  62.1,  66.7]]
             img_size = 32
-        elif dataset in ['food-101n','Clothing1M']:
-            mean = [0.485, 0.456, 0.406]
-            std = [0.229, 0.224, 0.225]
-            img_size = 448
         elif dataset in ['Clothing1M']:
             mean = [0.6959, 0.6537, 0.6371]
             std = [0.3113, 0.3192, 0.3214]
@@ -358,7 +354,7 @@ class ReAug(object):
         if dataset in ['cifar10', 'cifar100']:
             rand_crop = kaug.RandomCrop(size=(img_size, img_size), padding=(2, 2, 2, 2), padding_mode='reflect')
             print("dataset in ReAug is " + dataset)
-        elif dataset in ['food-101n','Clothing1M']:
+        elif dataset in ['Clothing1M']:
             rand_crop = kaug.RandomResizedCrop(size=(img_size, img_size), scale=(1.05, 1.25))
         else:
             raise AssertionError(f'ReAug for {dataset} is not implemented yet!')
@@ -377,51 +373,6 @@ class ReAug(object):
             kaug.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
             same_on_batch=False,
         )
-        # if dataset != "food-101n":
-        #     if dataset in ['cifar10', 'cifar100']:
-        #         rand_crop = kaug.RandomCrop(size=(img_size, img_size), padding=(2, 2, 2, 2), padding_mode='reflect')
-        #         print("dataset in ReAug is "+dataset)
-        #     elif dataset in ['tiny_imagenet', 'webvision', 'mix_data']:
-        #         rand_crop = kaug.RandomResizedCrop(size=(img_size, img_size), scale=(1.05, 1.25))
-        #     else:
-        #         raise AssertionError(f'ReAug for {dataset} is not implemented yet!')
-        #
-        #     self.transform_weak = AugmentationSequential(
-        #         # kaug.Denormalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         rand_crop,
-        #         kaug.RandomHorizontalFlip(),
-        #         # kaug.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         same_on_batch=False,
-        #     )
-        #
-        #     self.transform_strong = AugmentationSequential(
-        #         kaug.Denormalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         IntermediateTransform(strong_aug),
-        #         kaug.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         same_on_batch=False,
-        #     )
-        # else:
-        #     rescale_size = 256
-        #     crop_size = 224
-        #     self.transform_weak =torchvision.transforms.Compose([
-        #         kaug.Denormalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         torchvision.transforms.ToPILImage(),
-        #         torchvision.transforms.Resize(size=rescale_size),
-        #         torchvision.transforms.CenterCrop(size=crop_size),
-        #         torchvision.transforms.ToTensor(),
-        #         kaug.Normalize(mean=torch.tensor(mean), std=torch.tensor(std))
-        #     ])
-        #
-        #     self.transform_strong = torchvision.transforms.Compose([
-        #         kaug.Denormalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        #         torchvision.transforms.ToPILImage(),
-        #         torchvision.transforms.Resize(size=rescale_size),
-        #         torchvision.transforms.RandomHorizontalFlip(),
-        #         torchvision.transforms.RandomCrop(size=crop_size),
-        #         RandAugment(),
-        #         torchvision.transforms.ToTensor(),
-        #         kaug.Normalize(mean=torch.tensor(mean), std=torch.tensor(std))
-        #     ])
 
     def __call__(self, sample, mode='w'):
         if mode == 'w':
