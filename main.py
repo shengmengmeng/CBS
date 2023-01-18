@@ -182,8 +182,6 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
         init_target_list = True
     else:
         init_target_list = False
-    is_text_task = isinstance(trainloader, dict)
-    logits_ = torch.zeros(num_samples, num_classes).cuda()
     with torch.no_grad():
         for it, sample in enumerate(trainloader):
             inputs, y, index = sample
@@ -203,7 +201,6 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
                 raise AssertionError('Not Supported!')
 
             unclean_criterions[index] = loss.cpu()
-            # logits_[index] = logits.float()
 
     unclean_criterions = (unclean_criterions - unclean_criterions.min()) / (unclean_criterions.max() - unclean_criterions.min())
 
@@ -220,20 +217,22 @@ def eval_train(net, num_classes, num_samples, trainloader, clean_rate, dev, targ
         idx_chosen_sm.append(indices[sorted_idx_j[:partition_j]])
     idx_chosen_sm = np.concatenate(idx_chosen_sm)
     prob_clean[idx_chosen_sm] = 1
-    return prob_clean, targets_list, None
+    return prob_clean, targets_list
 
 
 
-def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accuracy_meter, aug, num_class, ep, p_clean, logits_, loss_weight, corr_label_dist, ema_label_dist, params):
+def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accuracy_meter, aug, num_class, ep, p_clean, loss_weight, corr_label_dist, ema_label_dist, params):
     net.train()
     pbar = tqdm(trainloader, ncols=150, ascii=' >', leave=False, desc='training')
     for it, sample in enumerate(pbar):
+
         x, y, indices = sample
         batch_size = x.size(0)
         x, y = x.cuda(), y.cuda()
 
         labels_ = torch.zeros(batch_size, num_class).cuda().scatter_(1, y.view(-1, 1), 1)
-        weight_ = torch.FloatTensor(p_clean[indices]).view(-1, 1).cuda() if isinstance(p_clean, np.ndarray) else p_clean[indices].view(-1, 1)
+        weights_ = torch.FloatTensor(p_clean[indices]).view(-1, 1).cuda() if isinstance(p_clean, np.ndarray) else \
+            p_clean[indices].view(-1, 1)
 
         with torch.no_grad():
             outputs = net(x)
@@ -241,22 +240,26 @@ def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accura
             px = logits.softmax(dim=1)
             pred_net = F.one_hot(px.max(dim=1)[1], num_class).float()
             high_conf_cond = (labels_ * px).sum(dim=1) > params.tau
-            weight_[high_conf_cond] = 1
+            weights_[high_conf_cond] = 1
             if params.useEMA:
                 label_ema = ema_label_dist[indices, :].clone().cuda()
-                aph = params.aph
+                aph = params.aph  # 0.1 - (0.1 - params.aph) * linear_rampup(ep, params.start_expand)
                 label_ema = label_ema * aph + px * (1 - aph)
-                pseudo_label_l = labels_ * weight_ + label_ema * (1 - weight_)
+                pseudo_label_l = labels_ * weights_ + label_ema * (1 - weights_)
             else:
-                pseudo_label_l = labels_ * weight_ + pred_net * (1 - weight_)
-            idx_chosen = torch.where(weight_ == 1)[0]
+                pseudo_label_l = labels_ * weights_ + pred_net * (1 - weights_)
+            idx_chosen = torch.where(weights_ == 1)[0]  # idx_chosen includes clean samples only
+            n_clean = idx_chosen.size(0)
 
-            idx_noises = torch.where(weight_ != 1)[0]
-            idx_noises = torch.cat((idx_noises, idx_chosen[torch.randperm(idx_chosen.size(0))]), dim=0)
+            idx_noises = torch.where(weights_ != 1)[0]
+            overlay_num = min(int(params.overlay_ratio * batch_size), idx_chosen.size(0))
+            idx_noises = torch.cat((idx_noises, idx_chosen[torch.randperm(idx_chosen.size(0))[:overlay_num]]),
+                                   dim=0)
 
-            x2 = aug(x, mode='s').cuda()
-            outputs2 = net(x2)
-            logits2 = outputs2['logits'] if type(outputs2) is dict else outputs2
+            if idx_noises.size(0) > 0:
+                x2 = aug(x, mode='s').cuda()
+                outputs2 = net(x2)
+                logits2 = outputs2['logits'] if type(outputs2) is dict else outputs2
 
             with torch.no_grad():
                 if epoch > params.start_expand:
@@ -266,15 +269,17 @@ def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accura
                     score1 = px.max(dim=1)[0]
                     score2 = px2.max(dim=1)[0]
                     match = px.max(dim=1)[1] == px2.max(dim=1)[1]
-                    hc2_sel_wx1 = high_conf_sel2(idx_chosen, weight_, batch_size, score1, score2, match, params.tau_expand,
-                                                 expected_ratio)
-                    idx_chosen = torch.where(hc2_sel_wx1 == 1)[0]
+                    hc2_sel_wx1 = high_conf_sel2(idx_chosen, weights_, batch_size, score1, score2, match,
+                                                 params.tau_expand, expected_ratio)
+                    idx_chosen = torch.where(hc2_sel_wx1 == 1)[0]  # idx_chosen includes clean & ID noisy samples
+                n_semi = idx_chosen.size(0) - n_clean
 
-            idx_for_idx_noises = torch.randperm(idx_noises.size(0))
+            ni = max(int((1 + params.overlay_ratio) * batch_size) - idx_chosen.size(0), 0)
+            idx_for_idx_noises = torch.randperm(idx_noises.size(0))[:ni]
 
         l = np.random.beta(4, 4)
         l = max(l, 1 - l)
-        if params.use_mixup:
+        if params.use_mixup and idx_chosen.size(0) > 0:
             idx2 = idx_chosen[torch.randperm(idx_chosen.size(0))]
 
             x_mix = l * x[idx_chosen] + (1 - l) * x[idx2]
@@ -286,9 +291,9 @@ def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accura
             pseudo_label_mix = copy.deepcopy(pseudo_label_l[idx_chosen])
             x_mix = copy.deepcopy(x[idx_chosen])
             confidence = px.max(dim=1)[0]
-            l = np.random.beta(4, 4)
-            l = max(l, 1 - l)
             for item in range(idx_chosen.size(0)):
+                l = np.random.beta(4, 4)
+                l = max(l, 1 - l)
                 if confidence[idx_chosen[item]] > confidence[idx2[item]]:
                     x_mix[item] = l * x[idx_chosen[item]] + (1 - l) * x[idx2[item]]
                     pseudo_label_mix[item] = l * pseudo_label_l[idx_chosen[item]] + (1 - l) * pseudo_label_l[
@@ -300,23 +305,23 @@ def robust_train(net, optimizer, trainloader, dev, train_loss_meter,train_accura
 
             outputs_mix = net(x_mix)
             logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
-            loss_mix = loss_mix * config.alpha + (1 - config.alpha) * F.cross_entropy(logits_mix, pseudo_label_mix)
+            loss_mix = loss_mix * config.alpha + (1 - config.alpha) * F.cross_entropy(logits_mix,
+                                                                                      pseudo_label_mix)
+
         else:
             outputs_mix = net(x[idx_chosen])
             logits_mix = outputs_mix['logits'] if type(outputs_mix) is dict else outputs_mix
             loss_mix = F.cross_entropy(logits_mix, pseudo_label_l[idx_chosen])
 
-
-        if params.use_cons:
-            loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_for_idx_noises])
+        if params.use_cons and idx_noises.size(0) > 0:
+            loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_noises[idx_for_idx_noises]])
         else:
             if params.use_mixup:
                 loss_cr = torch.tensor(0).float()
             else:
-                loss_cr = F.cross_entropy(logits2[idx_for_idx_noises], pseudo_label_l[idx_for_idx_noises])
+                loss_cr = F.cross_entropy(logits2, pseudo_label_l[idx_noises])
 
-        loss = loss_mix + loss_cr*loss_weight
-
+        loss = loss_mix + loss_cr * loss_weight
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -402,31 +407,6 @@ def build_loader(params):
         test_loader = DataLoader(test_set, batch_size=params.batch_size, shuffle=False, num_workers=8,
                                  pin_memory=False)
 
-    if dataset == "food-101n":
-        num_classes = 101
-        root="/data/Food-101N_release/"
-        rescale_size = 512
-        crop_size = 448
-        train_transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(size=rescale_size),
-            torchvision.transforms.RandomHorizontalFlip(),
-            torchvision.transforms.RandomCrop(size=crop_size),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-        ])
-        test_transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(size=rescale_size),
-            torchvision.transforms.CenterCrop(size=crop_size),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-        ])
-        train_dataset = Food101N(root, transform=train_transform)
-        test_set = Food101(os.path.join(root, 'food-101'), split='test', transform=test_transform)
-
-        trainloader = DataLoader(train_dataset, batch_size=params.batch_size, shuffle=True, num_workers=8,
-                                 pin_memory=True)
-        test_loader = DataLoader(test_set, batch_size=params.batch_size, shuffle=False, num_workers=8, pin_memory=False)
-
     if dataset == "Clothing1M":
         num_classes = 14
         root="/data/Clothing1M/"
@@ -507,6 +487,7 @@ def parse_args():
     parser.add_argument('--noise-type', type=str, default='symmetric')
     parser.add_argument('--closeset-ratio', type=float, default=0.2)
     parser.add_argument('--database', type=str, default='./dataset')
+    parser.add_argument('--overlay-ratio', type=float, default=1.0)
 
     parser.add_argument('--dataset', type=str, default='cifar100')
     parser.add_argument('--model', type=str, default='resnet32')
@@ -581,10 +562,10 @@ if __name__ == '__main__':
             warmup(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter)
         else:
             rho = rho_begin - (rho_begin - rho_final) * linear_rampup(epoch - config.warmup_epochs, T_rho)
-            approx_clean_probs, targets_all,logits_  = eval_train(model, n_classes, n_samples, input_loader, rho, device,
+            approx_clean_probs, targets_all = eval_train(model, n_classes, n_samples, input_loader, rho, device,
                                                          targets_all, criterion=config.criterion)  # np.array, (num_samples, )
             omega = omega_begin - (omega_begin - omega_final) * linear_rampup(epoch - config.warmup_epochs, T_omega)
-            robust_train(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter, re_aug,n_classes, epoch, approx_clean_probs, logits_, omega,
+            robust_train(model, optim, input_loader, device, train_loss_meter,train_accuracy_meter, re_aug,n_classes, epoch, approx_clean_probs, omega,
                          corrected_label_distributions, ema_label_distributions, config)
 
         eval_result = evaluate_cls_acc(loader_dict['test_loader'], model, device)
