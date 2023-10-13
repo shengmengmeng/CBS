@@ -29,6 +29,7 @@ Here is an example shell script to run CBS on CIFAR-10 :
 \--noise-type unif --closeset-ratio 0.6 --lr-decay cosine:40,1e-5,200
 \--opt sgd --dataset cifar100 --imbalance True --imb-factor 0.02
 \--alpha 0.0 --aph 0.35 --gpu 6 --use-cons True --use-mixup True --ACM 0.2
+\
 ```
 # Results on Cifar10 and Cifar100
 
