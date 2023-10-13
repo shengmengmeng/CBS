@@ -19,8 +19,82 @@ from kornia.augmentation.container import AugmentationSequential
 from randaugment import CIFAR10Policy, ImageNetPolicy, Cutout, RandAugment
 
 default_float_dtype = torch.get_default_dtype()
-
+def min_max(x):
+    return (x - x.min())/(x.max() - x.min())
 # misc
+
+def replace_threshold_examples(data,num_classes, aum_calculator):
+  num_threshold_examples = min(len(data) // 100, len(data) // num_classes)
+  threshold_data_ids = random.sample(list(range(len(data.data))), num_threshold_examples)
+  data.switch_threshold_examples(threshold_data_ids)
+  aum_calculator.switch_threshold_examples(threshold_data_ids)
+  
+class AUMCalculator:
+
+    def __init__(self, margin_smoothing, num_labels, num_examples, percentile) -> None:
+        self.delta = margin_smoothing
+
+        self.num_labels = num_labels
+        self.num_examples = num_examples
+
+        self.AUMMatrix = {}
+        self.t = {}
+
+        self.threshold_aum_examples = {}
+        self.threshold_t = {}
+
+        self.percentile = percentile
+
+        for i in range(num_examples):
+            self.AUMMatrix[i] = np.zeros(num_labels)
+            self.t[i] = 0
+
+    def get_aums(self, ids):
+        x = []
+        for id in ids:
+            if id not in self.threshold_aum_examples:
+                x.append(self.AUMMatrix[id])
+            else:
+                x.append(self.threshold_aum_examples[id])
+
+        return np.array(x)
+
+    def switch_threshold_examples(self, ids):
+
+        self.threshold_aum_examples = {}
+        self.threshold_t = {}
+        for id in ids:
+            self.threshold_aum_examples[id] = np.ones(self.num_labels) * 0
+            self.threshold_t[id] = 0
+        self.num_threshold_examples = len(ids)
+
+    def retrieve_threshold(self):
+        if self.num_threshold_examples == 0:
+            return 0
+
+        threshold_pool = []
+        for threshold_example in self.threshold_aum_examples:
+            threshold_pool.append(self.threshold_aum_examples[threshold_example][-1])
+        threshold_pool.sort(reverse=True)
+        print(threshold_pool)
+        return threshold_pool[int((self.num_threshold_examples * self.percentile) // 100)]
+
+    def update_aums(self, ids, margins):
+        for i in range(len(ids)):
+            if ids[i] not in self.threshold_aum_examples:
+                self.AUMMatrix[ids[i]] = margins[i] * self.delta / \
+                                         (1 + self.t[ids[i]]) + self.AUMMatrix[ids[i]] * \
+                                         (1 - self.delta / (1 + self.t[ids[i]]))
+                self.t[ids[i]] += 1
+            else:
+                self.threshold_aum_examples[ids[i]] = margins[i] * self.delta / \
+                                                      (1 + self.threshold_t[ids[i]]) + self.threshold_aum_examples[
+                                                          ids[i]] * \
+                                                      (1 - self.delta / (1 + self.threshold_t[ids[i]]))
+                self.threshold_t[ids[i]] += 1
+
+
+
 def init_seeds(seed=0):
     random.seed(seed)
     np.random.seed(seed)
@@ -31,7 +105,15 @@ def init_seeds(seed=0):
     # cudnn.benchmark = True
     torch.cuda.empty_cache()
 
+class CLDataTransform(object):
+    def __init__(self, transform_weak, transform_strong):
+        self.transform_weak = transform_weak
+        self.transform_strong = transform_strong
 
+    def __call__(self, sample):
+        x_w = self.transform_weak(sample)
+        x_s = self.transform_strong(sample)
+        return x_w, x_s
 def set_device(gpu=None):
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
