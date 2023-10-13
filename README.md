@@ -39,20 +39,9 @@ Here is an example shell script to run CBS on CIFAR-100 :
  python main_web.py --rho-range 0.9:0.8:30 --dataset web-bird --gpu 0
 ```
 
-# Results on Cifar10 and Cifar100
-
-| Datasets               |  Cifar10               |   Cifar100                | 
-|:-----------------------|:-----------------------|:--------------------------|
-|  IF                    | [1,10,20,50,100,200]   |    [1,10,20]              |
-|  NR                    |  [0.0,0.2,0.4]         |     [0.0,0.2,0.4,0.6]     |
-|  CE                    |  74.49                 | 46.76                     |
-|  Class-Balanced        |63.49                   |     42.81                 |
-|  Focal                 |71.59                   |         43.85             |
-|  LDAM-DRW              |  73.46                 |         45.47             |
-|Co-teaching             |  60.63                 |         36.55             |
-|O2U                     |  65.01                 |         40.21             |
-|MW-Net                  |  74.13                 |         49.28             |
-|HAR                     | 73.50                  |          42.88            |
-|CurveNet                |  75.70                 | 50.49                     |
-|Ours                    |78.47                   |     52.94                 |
-
+# Results on Cifar10.
+(Table1.png)
+# Results on Cifar100.
+(Table2.png)
+# Results on Web-Aircraft, Web-Bird, and Web-Car.
+(Table3.png)
