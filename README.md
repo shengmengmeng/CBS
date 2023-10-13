@@ -40,8 +40,8 @@ Here is an example shell script to run CBS on CIFAR-100 :
 ```
 
 # Results on Cifar10.
-(Table1.png)
+!(Table1.png)
 # Results on Cifar100.
-(Table2.png)
+!(Table2.png)
 # Results on Web-Aircraft, Web-Bird, and Web-Car.
-(Table3.png)
+!(Table3.png)
