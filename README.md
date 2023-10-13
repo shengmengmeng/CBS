@@ -24,13 +24,21 @@ You can download the Clothing1M from [here](https://github.com/lightas/Occluded-
 Here is an example shell script to run CBS on CIFAR-10 :
 
 ```python
- python main_v6.py --warmup-epoch 40 --epoch 200 --rho-range 0.4:0.4:100
-\--batch-size 128 --lr 0.005 --warmup-lr 0.005 --start-expand 100
-\--noise-type unif --closeset-ratio 0.6 --lr-decay cosine:40,1e-5,200
-\--opt sgd --dataset cifar100 --imbalance True --imb-factor 0.02
-\--alpha 0.0 --aph 0.35 --gpu 6 --use-cons True --use-mixup True --ACM 0.2
-\
+python main_v6.py  --closeset-ratio 0.6 --rho-range 0.8:0.7:100 --dataset cifar10 --imb-factor 0.02 --gpu 0
 ```
+
+Here is an example shell script to run CBS on CIFAR-100 :
+
+```python
+python main_v6.py --closeset-ratio 0.6 --rho-range 0.8:0.7:100 --dataset cifar100 --imb-factor 0.02 --gpu 0
+```
+
+Here is an example shell script to run CBS on CIFAR-100 :
+
+```python
+ python main_web.py --rho-range 0.9:0.8:30 --dataset web-bird --gpu 0
+```
+
 # Results on Cifar10 and Cifar100
 
 | Datasets               |  Cifar10               |   Cifar100                | 
