@@ -15,10 +15,9 @@ from utils.builder import *
 from model.MLPHeader import MLPHead
 from util import *
 from utils.eval import *
-from model.ResNet32 import resnet32
 from data.imbalance_cifar import *
-from data.Clothing1M import *
 from torch.cuda.amp import autocast as autocast
+from torch.utils.data import Dataset, DataLoader
 import os
 
 #解决报错：OSError: image file is truncated (5 bytes not processed)
@@ -401,27 +400,27 @@ def parse_args():
     parser.add_argument('--logger-root', type=str, default='./result/')
     parser.add_argument('--gpu', type=str, default="0")
     parser.add_argument('--seed', type=int, default=123)
-    parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--lr-decay', type=str, default='cosine:20,5e-4,100')
+    parser.add_argument('--batch-size', type=int, default=16)
+    parser.add_argument('--lr', type=float, default=0.005)
+    parser.add_argument('--lr-decay', type=str, default='cosine:10,1e-4,65')
     parser.add_argument('--weight-decay', type=float, default=5e-4)
     parser.add_argument('--opt', type=str, default='sgd')
-    parser.add_argument('--warmup-epochs', type=int, default=20)
-    parser.add_argument('--warmup-lr', type=float, default=0.001)
+    parser.add_argument('--warmup-epochs', type=int, default=10)
+    parser.add_argument('--warmup-lr', type=float, default=0.005)
     parser.add_argument('--warmup-gradual', action='store_true')
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=70)
     parser.add_argument('--params-init', type=str, default='none')
     parser.add_argument('--criterion', type=str, default='loss')
     parser.add_argument('--aug-type', type=str, default='auto')
-    parser.add_argument('--use-cons', type=bool, default=False)
-    parser.add_argument('--use-mixup', type=bool, default=False)
+    parser.add_argument('--use-cons', type=bool, default=True)
+    parser.add_argument('--use-mixup', type=bool, default=True)
     parser.add_argument('--rho-range', type=str, default='0.2:0.2:60', help='Format: stop:start:step')
     parser.add_argument('--omega-range', type=str, default='1.0:1.0:60', help='Format: stop:start:step')
     parser.add_argument('--tau', type=float, default=0.9)
     parser.add_argument('--tau-expand', type=float, default=0.8)
-    parser.add_argument('--start-expand', type=int, default=80)
+    parser.add_argument('--start-expand', type=int, default=55)
     parser.add_argument('--bs-threshold', type=float, default=0.9)
-    parser.add_argument('--useEMA', type=bool, default=False)
+    parser.add_argument('--useEMA', type=bool, default=True)
     parser.add_argument('--aph', type=float, default=0.55)
     parser.add_argument('--rescale-size', type=int, default=32)
     parser.add_argument('--crop-size', type=int, default=32)
@@ -430,19 +429,19 @@ def parse_args():
     parser.add_argument('--closeset-ratio', type=float, default=0.2)
     parser.add_argument('--database', type=str, default='./dataset')
     parser.add_argument('--overlay-ratio', type=float, default=1.0)
-    parser.add_argument('--dataset', type=str, default='cifar100')
-    parser.add_argument('--model', type=str, default='resnet32')
+    parser.add_argument('--dataset', type=str, default='web-aircraft')
+    parser.add_argument('--model', type=str, default='resnet50')
     parser.add_argument('--imbalance', type=bool, default=False)
     parser.add_argument('--data_percent', default=1, type=float, help='data number percent')
     parser.add_argument('--imb-factor', type=float, default=0.05)
-    parser.add_argument('--alpha', type=float, default=0.5)
+    parser.add_argument('--alpha', type=float, default=0.8)
     parser.add_argument('--save-weights', type=bool, default=False)
     parser.add_argument('--resume', type=str, default=None)
     parser.add_argument('--restart-epoch', type=int, default=0)
     parser.add_argument('--delta', default=0.997, type=float,
                         help='EMA smoothing for marigin calculation')
-    parser.add_argument('--CM', default=0.3, type=float)
-    parser.add_argument('--label-smoothing', default=0.6, type=float)
+    parser.add_argument('--CM', default=0.2, type=float)
+    parser.add_argument('--label-smoothing', default=0.2, type=float)
     args = parser.parse_args()
     print(args)
     return args
