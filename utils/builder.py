@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 from randaugment import CIFAR10Policy, ImageNetPolicy, Cutout, RandAugment
+from data.image_folder import IndexedImageFolder
 import numpy as np
 import cv2
 
